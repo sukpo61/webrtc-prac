@@ -1,6 +1,6 @@
 import { io } from "socket.io-client";
 
-const userinfo = {
+export const userinfo = {
   id: "1234",
 };
 

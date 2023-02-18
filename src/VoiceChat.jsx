@@ -2,6 +2,7 @@ import React from "react";
 import socket from "./socket";
 import styled from "styled-components";
 import { useState, useEffect, useRef } from "react";
+import { userinfo } from "./socket";
 
 const VoiceChat = () => {
   const [localStream, setLocalStream] = useState(null);
@@ -13,17 +14,11 @@ const VoiceChat = () => {
     () => new Map()
   );
 
-  // const streamToBlob = require("stream-to-blob");
-
   const handleVideoRef = (video) => {
     if (video) {
       video.srcObject = localStream;
     }
   };
-
-  // let localStream;
-  // let remoteStreams = [];
-  // let myPeerConnection;
 
   async function getMedia() {
     try {
@@ -36,11 +31,6 @@ const VoiceChat = () => {
       console.log(e);
     }
   }
-  // 스트림에 정보를 담게됨.
-
-  // console.log(localStream);
-
-  // setLocalStream(myStream);
 
   function handleIce(data) {
     console.log("sent candidate");
@@ -91,8 +81,10 @@ const VoiceChat = () => {
     );
   });
 
-  const createRTCPeerConnection = async (userid) => {
-    console.log(userid);
+  const createRTCPeerConnection = async (otheruserid, peerkind) => {
+    console.log(otheruserid);
+    //a.1-2 b id 받음.
+    //b.1-2 a id 받음.
     const NewUserPeerConnection = new RTCPeerConnection({
       iceServers: [
         {
@@ -106,55 +98,72 @@ const VoiceChat = () => {
         },
       ],
     });
+    //a.2 b와 연결할 a의 피어커넥션 생성.
+    //b.2 a와 연결할 b의 피어커넥션 생성.
 
-    NewUserPeerConnection.addEventListener("addstream", handleAddStream);
-    //html 에 애트 스트림이 되면 하드코딩을 하게됨, 애드 스트림을 정확히 알아야 할듯.
-
-    NewUserPeerConnection.addEventListener("icecandidate", handleIce);
-
-    console.log("localStream", localStream);
+    // NewUserPeerConnection.addEventListener("addstream", handleAddStream);
+    // NewUserPeerConnection.addEventListener("icecandidate", handleIce);
+    //a.3 애드스트림, 아이스캔디데이트 리스너 추가.
+    //b.3 애드스트림, 아이스캔디데이트 리스너 추가.
 
     localStream
       .getTracks()
       .forEach((track) => NewUserPeerConnection.addTrack(track, localStream));
-    // 로컬스트림의 트랙을 커낵션에 넣게됨.
+    //a.4 a 로컬스트림 트랙 추가.
+    //b.4 b 로컬스트림 트랙 추가.
 
-    const newMap = new Map(RtcPeerConnectionMap);
-    newMap.set(userid, NewUserPeerConnection);
-    setRtcPeerConnectionMap(newMap);
+    if (peerkind === "offer") {
+      const offer = await NewUserPeerConnection.createOffer();
+      //a.5 a 의 오퍼를 생성하고
+      NewUserPeerConnection.setLocalDescription(offer);
+      //a.6 a 로컬피어에 a 로컬 오퍼 추가
 
-    const offer = await NewUserPeerConnection.createOffer();
-    //2. a 의 오퍼를 생성하고
-    NewUserPeerConnection.setLocalDescription(offer);
-    // a 로컬에 자기 로컬 오퍼 추가sddd
-    socket.emit("offer", offer, room, userid);
-    //3. 백앤드로 보냄
+      const newMap = new Map(RtcPeerConnectionMap);
+      newMap.set(otheruserid, NewUserPeerConnection);
+      setRtcPeerConnectionMap(newMap);
 
-    console.log("sent the offer");
+      //a.7 a의 피어커넥션 맵에 b id인 피어커넥션 추가.
+
+      socket.emit("offer", offer, otheruserid, userinfo.id);
+      //a.8  백앤드로 a offer 와 b id, a id를 보냄.
+      console.log("sent the offer");
+    } else {
+      const answer = await NewUserPeerConnection.createOffer();
+      //b.5 a 의 오퍼를 생성하고
+      NewUserPeerConnection.setLocalDescription(answer);
+      //b.6 로컬에 자기 로컬 오퍼 추가
+
+      const newMap = new Map(RtcPeerConnectionMap);
+      newMap.set(otheruserid, NewUserPeerConnection);
+      setRtcPeerConnectionMap(newMap);
+
+      //b.7 b의 피어커넥션 맵에 a id인 피어커넥션 추가.
+
+      socket.emit("answer", answer, otheruserid, userinfo.id);
+      //b.8  백앤드로 b answer 와 a id 를 보냄.
+      console.log("sent the answer");
+    }
   };
 
   useEffect(() => {
     if (RtcPeerConnectionMap.size !== 0) {
       console.log(RtcPeerConnectionMap);
-      socket.on("offer", async (offer) => {
-        console.log("received the offer");
+      socket.on("offer", async (offer, offeruserid) => {
+        const offeredPeerConnection = RtcPeerConnectionMap.get(offeruserid);
 
-        //5. b가 a의 오퍼를 받게 됨
-        myPeerConnection.setRemoteDescription(offer);
-        // b 로컬에 a 리모트 오퍼 추가
-        const answer = await myPeerConnection.createAnswer();
-        //6. b의 오퍼를 생성함.
-        myPeerConnection.setLocalDescription(answer);
-        //7. b의 로컬에 자기 로컬 앤서 추가, 둘다 추가 됨d
-        socket.emit("answer", answer, room);
-        //8. 앤서 백앤으로 보내고
-        console.log("sent the answer");
+        //a.11 b가 a의 오퍼를 받게 됨
+        offeredPeerConnection.setRemoteDescription(offer);
+        //a.12 b 로컬피어에 a 리모트 오퍼 추가. 둘다 추가됨.
+
+        console.log(`${offeruserid} send offer`);
       });
 
-      socket.on("answer", (answer) => {
-        console.log("received the answer");
-        myPeerConnection.setRemoteDescription(answer);
-        //10. a로컬에 b 리모트 앤서 추가, 둘다 추가 됨
+      socket.on("answer", (answer, answeruserid) => {
+        const answeredPeerConnection = RtcPeerConnectionMap.get(answeruserid);
+
+        answeredPeerConnection.setRemoteDescription(answer);
+
+        console.log(`${answeruserid} send answer`);
       });
 
       socket.on("ice", (ice) => {
@@ -169,11 +178,13 @@ const VoiceChat = () => {
       console.log("123", localStream);
 
       socket.on("welcome", async (welcomeuserid) => {
-        await createRTCPeerConnection(welcomeuserid);
+        //a.1 a 프런트에 b 의 아이디가 오게됨.
+        await createRTCPeerConnection(welcomeuserid, "offer");
       });
       socket.on("getuserids", (nicknames) => {
         nicknames.map((id) => {
-          createRTCPeerConnection(id);
+          createRTCPeerConnection(id, "answer");
+          //b.1 다른사람의 닉네임배열로 (2명이면 a의 id) 피어커넥션 생성함수 실행.
         });
       });
     }
