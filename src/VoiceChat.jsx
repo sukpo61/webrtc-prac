@@ -101,8 +101,8 @@ const VoiceChat = () => {
     //a.2 b와 연결할 a의 피어커넥션 생성.
     //b.2 a와 연결할 b의 피어커넥션 생성.
 
-    // NewUserPeerConnection.addEventListener("addstream", handleAddStream);
-    // NewUserPeerConnection.addEventListener("icecandidate", handleIce);
+    NewUserPeerConnection.addEventListener("addstream", handleAddStream);
+    NewUserPeerConnection.addEventListener("icecandidate", handleIce);
     //a.3 애드스트림, 아이스캔디데이트 리스너 추가.
     //b.3 애드스트림, 아이스캔디데이트 리스너 추가.
 
@@ -128,7 +128,7 @@ const VoiceChat = () => {
       //a.8  백앤드로 a offer 와 b id, a id를 보냄.
       console.log("sent the offer");
     } else {
-      const answer = await NewUserPeerConnection.createOffer();
+      const answer = await NewUserPeerConnection.createAnswer();
       //b.5 a 의 오퍼를 생성하고
       NewUserPeerConnection.setLocalDescription(answer);
       //b.6 로컬에 자기 로컬 오퍼 추가
@@ -165,18 +165,15 @@ const VoiceChat = () => {
 
         console.log(`${answeruserid} send answer`);
       });
-
-      socket.on("ice", (ice) => {
-        console.log("received candidate");
-        myPeerConnection.addIceCandidate(ice);
-      });
     }
+    socket.on("ice", (ice) => {
+      console.log("received candidate");
+      Array.from(RtcPeerConnectionMap.values()).addIceCandidate(ice);
+    });
   }, [RtcPeerConnectionMap]);
 
   useEffect(() => {
     if (localStream) {
-      console.log("123", localStream);
-
       socket.on("welcome", async (welcomeuserid) => {
         //a.1 a 프런트에 b 의 아이디가 오게됨.
         await createRTCPeerConnection(welcomeuserid, "offer");
