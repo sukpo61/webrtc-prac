@@ -11,19 +11,11 @@ const VoiceChat = () => {
   const [username, setUsername] = useState("");
   const [FirstJoin, setFirstJoin] = useState(true);
   const [RtcPeerConnectionMap, setRtcPeerConnectionMap] = useState(new Map());
-
-  // let RtcPeerConnectionMap = new Map();
-
-  // const handleVideoRef = (video) => {
-  //   if (video) {
-  //     video.srcObject = localStream;
-  //   }
-  // };
+  const [myDataChannel, setmyDataChannel] = useState(null);
 
   async function getMedia() {
     try {
       const myStream = await navigator.mediaDevices.getUserMedia({
-        audio: true,
         video: true,
       });
       setLocalStream(myStream);
@@ -46,25 +38,17 @@ const VoiceChat = () => {
   };
 
   const handleLeave = () => {
-    setRtcPeerConnectionMap(
+    if (RtcPeerConnectionMap.size !== 0) {
+      socket.emit("test");
       RtcPeerConnectionMap.forEach((peerconnection, id) => {
         peerconnection.close();
-        RtcPeerConnectionMap.delete(id);
-      })
-    );
-    localStream.getTracks().forEach((track) => {
-      track.stop();
-    });
+      });
+      setRtcPeerConnectionMap(() => new Map());
+    }
+
     setAllStreams([]);
     socket.emit("leave", userinfo.id, room);
   };
-
-  // 삭제하려면, a, b, c 가 있는 상황에서 c 가 나가면 a와 b 에서 c와의 피어 커낵션을 제거해야하고,
-  // c에서는 리모트 스트림 초기화,
-  // rtcPeerConnectionMap.get(response.id).close();
-  //     rtcPeerConnectionMap.delete(response.id);
-
-  // 소캣에서 또한 나가야 하며, 리모트 스트림을 편집해야 한다. 특정
 
   const StreamList = AllStreams.map((data) => {
     const remotehandleVideoRef = (video) => {
@@ -88,7 +72,7 @@ const VoiceChat = () => {
     );
   });
 
-  const createRTCPeerConnection = async (otheruserid) => {
+  const createRTCPeerConnection = async (userid) => {
     const NewUserPeerConnection = new RTCPeerConnection({
       iceServers: [
         {
@@ -107,97 +91,149 @@ const VoiceChat = () => {
       .getTracks()
       .forEach((track) => NewUserPeerConnection.addTrack(track, localStream));
 
+    NewUserPeerConnection.ontrack = (event) => {
+      handleAddStream(userid, event.streams[0]);
+    };
+
+    NewUserPeerConnection.onicecandidate = (event) => {
+      socket.emit("ice", event.candidate, userinfo.id, room);
+    };
+
+    setRtcPeerConnectionMap((e) => e.set(userid, NewUserPeerConnection));
+
     return NewUserPeerConnection;
+  };
+
+  const createData = (MyPeerConnection) => {
+    setmyDataChannel(MyPeerConnection.createDataChannel("chat"));
+
+    return MyPeerConnection.createDataChannel("chat");
+  };
+  const createAnswerData = (channel) => {
+    setmyDataChannel(channel);
+
+    return channel;
+  };
+
+  const checkMap = () => {
+    console.log(RtcPeerConnectionMap);
   };
 
   useEffect(() => {
     if (localStream) {
-      if (FirstJoin) {
-        console.log("B socketon");
-        socket.on("welcome", async (answerid) => {
-          const MyPeerConnection = await createRTCPeerConnection();
+      socket.off("welcome");
+      socket.off("offer");
+      socket.off("answer");
+      socket.off("ice");
+      socket.off("leave");
 
-          MyPeerConnection.onicecandidate = (event) => {
-            socket.emit("ice", event.candidate, userinfo.id);
+      socket.on("welcome", async (answerid) => {
+        const MyPeerConnection = await createRTCPeerConnection(answerid);
+
+        const myData = createData(MyPeerConnection);
+
+        myData.onmessage = (e) => {
+          console.log(e.data);
+        };
+
+        const offer = await MyPeerConnection.createOffer();
+
+        MyPeerConnection.setLocalDescription(offer);
+
+        socket.emit("offer", offer, userinfo.id, answerid);
+      });
+
+      socket.on("offer", async (offer, offerid, answerid) => {
+        const MyPeerConnection = await createRTCPeerConnection(offerid);
+
+        MyPeerConnection.ondatachannel = (e) => {
+          const myData = createAnswerData(e.channel);
+          myData.onmessage = (e) => {
+            console.log(e.data);
           };
+        };
 
-          MyPeerConnection.onaddstream = (event) => {
-            handleAddStream(answerid, event.stream);
-          };
+        MyPeerConnection.setRemoteDescription(offer);
 
-          setRtcPeerConnectionMap(
-            RtcPeerConnectionMap.set(answerid, MyPeerConnection)
-          );
-          const offer = await MyPeerConnection.createOffer();
+        const answer = await MyPeerConnection.createAnswer();
 
-          MyPeerConnection.setLocalDescription(offer);
+        MyPeerConnection.setLocalDescription(answer);
 
-          socket.emit("offer", offer, userinfo.id, answerid);
-        });
+        socket.emit("answer", answer, offerid, answerid);
+      });
 
-        socket.on("offer", async (offer, offerid, answerid) => {
-          const MyPeerConnection = await createRTCPeerConnection(offerid);
+      socket.on("answer", (answer, answerid) => {
+        RtcPeerConnectionMap.get(answerid).setRemoteDescription(answer);
+      });
 
-          MyPeerConnection.onicecandidate = (event) => {
-            socket.emit("ice", event.candidate, answerid);
-          };
-          //dㅇㅇd
-          MyPeerConnection.onaddstream = (event) => {
-            handleAddStream(offerid, event.stream);
-          };
-
-          setRtcPeerConnectionMap(
-            RtcPeerConnectionMap.set(offerid, MyPeerConnection)
-          );
-
-          MyPeerConnection.setRemoteDescription(offer);
-
-          const answer = await MyPeerConnection.createAnswer();
-
-          MyPeerConnection.setLocalDescription(answer);
-          console.log("b offer");
-          socket.emit("answer", answer, offerid, answerid);
-        });
-
-        socket.on("answer", (answer, answerid) => {
-          RtcPeerConnectionMap.get(answerid).setRemoteDescription(answer);
-        });
-
-        socket.on("ice", (ice, targetid) => {
+      socket.on("ice", (ice, targetid) => {
+        if (RtcPeerConnectionMap.get(targetid)) {
           RtcPeerConnectionMap.get(targetid).addIceCandidate(ice);
+        }
+      });
+
+      socket.on("leave", (targetid) => {
+        RtcPeerConnectionMap.get(targetid).close();
+        setRtcPeerConnectionMap((e) => {
+          e.delete(targetid);
+          return e;
         });
-        socket.on("leave", (targetid) => {
-          RtcPeerConnectionMap.get(targetid).close();
-          RtcPeerConnectionMap.delete(targetid);
-          setAllStreams((e) =>
-            e.filter((stream) => stream.userid !== targetid)
-          );
-        });
-        setFirstJoin(false);
-      }
+        console.log(RtcPeerConnectionMap);
+        setAllStreams((e) => e.filter((stream) => stream.userid !== targetid));
+      });
+      setFirstJoin(false);
     }
-  }, [localStream]);
+
+    return () => {
+      socket.off("welcome");
+      socket.off("offer");
+      socket.off("answer");
+      socket.off("ice");
+      socket.off("leave");
+    };
+  }, [localStream, RtcPeerConnectionMap]);
 
   return (
     <div>
       <h1>Voice Chat Room</h1>
       <div>
-        <input
-          type="text"
-          value={room}
-          onChange={(e) => setRoom(e.target.value)}
-        />
-        <input
-          type="text"
-          value={username}
-          onChange={(e) => setUsername(e.target.value)}
-        />
+        <InputWrap>
+          <input
+            type="text"
+            value={room}
+            onChange={(e) => setRoom(e.target.value)}
+          />
+          <input
+            type="text"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+          />
+        </InputWrap>
         <button onClick={handleJoin}>Join Room</button>
         <button onClick={handleLeave}>Leave Room</button>
+        <button onClick={checkMap}>Map</button>
+        <button
+          onClick={() => {
+            myDataChannel.send(username);
+          }}
+        >
+          send
+        </button>
       </div>
-      <div>{StreamList}</div>
+      <VideoWrap>{StreamList}</VideoWrap>
     </div>
   );
 };
 
 export default VoiceChat;
+
+const VideoWrap = styled.div`
+  display: flex;
+  flex-direction: row;
+`;
+const InputWrap = styled.div`
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  margin-bottom: 20px;
+`;
