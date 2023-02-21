@@ -2,83 +2,64 @@ import React from "react";
 import socket from "./socket";
 import styled from "styled-components";
 import { useState, useEffect, useRef } from "react";
+import { userinfo } from "./socket";
 
 const VoiceChat = () => {
   const [localStream, setLocalStream] = useState(null);
-  const [remoteStreams, setRemoteStreams] = useState([]);
+  const [AllStreams, setAllStreams] = useState([]);
   const [room, setRoom] = useState("my-room");
   const [username, setUsername] = useState("");
-  const [myPeerConnection, setmyPeerConnection] = useState(null);
-  const [RtcPeerConnectionMap, setRtcPeerConnectionMap] = useState(
-    () => new Map()
-  );
-
-  // const streamToBlob = require("stream-to-blob");
-
-  const handleVideoRef = (video) => {
-    if (video) {
-      video.srcObject = localStream;
-    }
-  };
-
-  // let localStream;
-  // let remoteStreams = [];
-  // let myPeerConnection;
+  const [FirstJoin, setFirstJoin] = useState(true);
+  const [RtcPeerConnectionMap, setRtcPeerConnectionMap] = useState(new Map());
+  const [myDataChannel, setmyDataChannel] = useState(null);
 
   async function getMedia() {
     try {
       const myStream = await navigator.mediaDevices.getUserMedia({
-        audio: true,
         video: true,
       });
       setLocalStream(myStream);
+
+      handleAddStream(userinfo.id, myStream);
     } catch (e) {
       console.log(e);
     }
   }
-  // 스트림에 정보를 담게됨.
 
-  // console.log(localStream);
+  const handleAddStream = (userid, stream) => {
+    if (stream) {
+      setAllStreams((e) => [...e, { userid, stream }]);
+    }
+  };
 
-  // setLocalStream(myStream);
-
-  function handleIce(data) {
-    console.log("sent candidate");
-    socket.emit("ice", data.candidate, room);
-  }
-
-  function handleAddStream(data) {
-    setRemoteStreams((e) => [...e, data.stream]);
-  }
-
-  async function initCall() {
-    await getMedia();
-    // 유저의 디바이스를 불러옴.
-    // makeConnection();
-  }
-
-  // handle join room
   const handleJoin = async () => {
-    await initCall();
+    await getMedia();
     socket.emit("join_room", room);
   };
 
-  // handle leave room
   const handleLeave = () => {
-    socket.emit("leave", localStream);
+    if (RtcPeerConnectionMap.size !== 0) {
+      socket.emit("test");
+      RtcPeerConnectionMap.forEach((peerconnection, id) => {
+        peerconnection.close();
+      });
+      setRtcPeerConnectionMap(() => new Map());
+    }
+
+    setAllStreams([]);
+    socket.emit("leave", userinfo.id, room);
   };
 
-  // render remote streams
-  const remoteStreamList = remoteStreams.map((stream, index) => {
+  const StreamList = AllStreams.map((data) => {
     const remotehandleVideoRef = (video) => {
       if (video) {
-        video.srcObject = stream;
+        video.srcObject = data.stream;
       }
     };
 
     return (
-      <div>
-        {index + 2}
+      <div key={data.userid}>
+        {data.userid}
         <video
           ref={remotehandleVideoRef}
           autoPlay
@@ -92,7 +73,6 @@ const VoiceChat = () => {
   });
 
   const createRTCPeerConnection = async (userid) => {
-    console.log(userid);
     const NewUserPeerConnection = new RTCPeerConnection({
       iceServers: [
         {
@@ -107,109 +87,153 @@ const VoiceChat = () => {
       ],
     });
 
-    NewUserPeerConnection.addEventListener("addstream", handleAddStream);
-    //html 에 애트 스트림이 되면 하드코딩을 하게됨, 애드 스트림을 정확히 알아야 할듯.
-
-    NewUserPeerConnection.addEventListener("icecandidate", handleIce);
-
-    console.log("localStream", localStream);
-
     localStream
       .getTracks()
       .forEach((track) => NewUserPeerConnection.addTrack(track, localStream));
-    // 로컬스트림의 트랙을 커낵션에 넣게됨.
 
-    const newMap = new Map(RtcPeerConnectionMap);
-    newMap.set(userid, NewUserPeerConnection);
-    setRtcPeerConnectionMap(newMap);
+    NewUserPeerConnection.ontrack = (event) => {
+      handleAddStream(userid, event.streams[0]);
+    };
 
-    const offer = await NewUserPeerConnection.createOffer();
-    //2. a 의 오퍼를 생성하고
-    NewUserPeerConnection.setLocalDescription(offer);
-    // a 로컬에 자기 로컬 오퍼 추가sddd
-    socket.emit("offer", offer, room, userid);
-    //3. 백앤드로 보냄
+    NewUserPeerConnection.onicecandidate = (event) => {
+      socket.emit("ice", event.candidate, userinfo.id, room);
+    };
 
-    console.log("sent the offer");
+    setRtcPeerConnectionMap((e) => e.set(userid, NewUserPeerConnection));
+
+    return NewUserPeerConnection;
+  };
+
+  const createData = (MyPeerConnection) => {
+    setmyDataChannel(MyPeerConnection.createDataChannel("chat"));
+
+    return MyPeerConnection.createDataChannel("chat");
+  };
+  const createAnswerData = (channel) => {
+    setmyDataChannel(channel);
+
+    return channel;
+  };
+
+  const checkMap = () => {
+    console.log(RtcPeerConnectionMap);
   };
 
   useEffect(() => {
-    if (RtcPeerConnectionMap.size !== 0) {
-      console.log(RtcPeerConnectionMap);
-      socket.on("offer", async (offer) => {
-        console.log("received the offer");
-
-        //5. b가 a의 오퍼를 받게 됨
-        myPeerConnection.setRemoteDescription(offer);
-        // b 로컬에 a 리모트 오퍼 추가
-        const answer = await myPeerConnection.createAnswer();
-        //6. b의 오퍼를 생성함.
-        myPeerConnection.setLocalDescription(answer);
-        //7. b의 로컬에 자기 로컬 앤서 추가, 둘다 추가 됨d
-        socket.emit("answer", answer, room);
-        //8. 앤서 백앤으로 보내고
-        console.log("sent the answer");
-      });
-
-      socket.on("answer", (answer) => {
-        console.log("received the answer");
-        myPeerConnection.setRemoteDescription(answer);
-        //10. a로컬에 b 리모트 앤서 추가, 둘다 추가 됨
-      });
-
-      socket.on("ice", (ice) => {
-        console.log("received candidate");
-        myPeerConnection.addIceCandidate(ice);
-      });
-    }
-  }, [RtcPeerConnectionMap]);
-
-  useEffect(() => {
     if (localStream) {
-      console.log("123", localStream);
+      socket.off("welcome");
+      socket.off("offer");
+      socket.off("answer");
+      socket.off("ice");
+      socket.off("leave");
 
-      socket.on("welcome", async (welcomeuserid) => {
-        await createRTCPeerConnection(welcomeuserid);
+      socket.on("welcome", async (answerid) => {
+        const MyPeerConnection = await createRTCPeerConnection(answerid);
+
+        const myData = createData(MyPeerConnection);
+
+        myData.onmessage = (e) => {
+          console.log(e.data);
+        };
+
+        const offer = await MyPeerConnection.createOffer();
+
+        MyPeerConnection.setLocalDescription(offer);
+
+        socket.emit("offer", offer, userinfo.id, answerid);
       });
-      socket.on("getuserids", (nicknames) => {
-        nicknames.map((id) => {
-          createRTCPeerConnection(id);
+
+      socket.on("offer", async (offer, offerid, answerid) => {
+        const MyPeerConnection = await createRTCPeerConnection(offerid);
+
+        MyPeerConnection.ondatachannel = (e) => {
+          const myData = createAnswerData(e.channel);
+          myData.onmessage = (e) => {
+            console.log(e.data);
+          };
+        };
+
+        MyPeerConnection.setRemoteDescription(offer);
+
+        const answer = await MyPeerConnection.createAnswer();
+
+        MyPeerConnection.setLocalDescription(answer);
+
+        socket.emit("answer", answer, offerid, answerid);
+      });
+
+      socket.on("answer", (answer, answerid) => {
+        RtcPeerConnectionMap.get(answerid).setRemoteDescription(answer);
+      });
+
+      socket.on("ice", (ice, targetid) => {
+        if (RtcPeerConnectionMap.get(targetid)) {
+          RtcPeerConnectionMap.get(targetid).addIceCandidate(ice);
+        }
+      });
+
+      socket.on("leave", (targetid) => {
+        RtcPeerConnectionMap.get(targetid).close();
+        setRtcPeerConnectionMap((e) => {
+          e.delete(targetid);
+          return e;
         });
+        console.log(RtcPeerConnectionMap);
+        setAllStreams((e) => e.filter((stream) => stream.userid !== targetid));
       });
+      setFirstJoin(false);
     }
-  }, [localStream]);
+
+    return () => {
+      socket.off("welcome");
+      socket.off("offer");
+      socket.off("answer");
+      socket.off("ice");
+      socket.off("leave");
+    };
+  }, [localStream, RtcPeerConnectionMap]);
 
   return (
     <div>
       <h1>Voice Chat Room</h1>
       <div>
-        <input
-          type="text"
-          value={room}
-          onChange={(e) => setRoom(e.target.value)}
-        />
-        <input
-          type="text"
-          value={username}
-          onChange={(e) => setUsername(e.target.value)}
-        />
+        <InputWrap>
+          <input
+            type="text"
+            value={room}
+            onChange={(e) => setRoom(e.target.value)}
+          />
+          <input
+            type="text"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+          />
+        </InputWrap>
         <button onClick={handleJoin}>Join Room</button>
         <button onClick={handleLeave}>Leave Room</button>
+        <button onClick={checkMap}>Map</button>
+        <button
+          onClick={() => {
+            myDataChannel.send(username);
+          }}
+        >
+          send
+        </button>
       </div>
-      <div>
-        1
-        <video
-          ref={handleVideoRef}
-          autoPlay
-          playsInline
-          width="400"
-          height="400"
-          muted
-        />
-        {remoteStreamList}
-      </div>
+      <VideoWrap>{StreamList}</VideoWrap>
     </div>
   );
 };
 
 export default VoiceChat;
+
+const VideoWrap = styled.div`
+  display: flex;
+  flex-direction: row;
+`;
+const InputWrap = styled.div`
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  margin-bottom: 20px;
+`;
