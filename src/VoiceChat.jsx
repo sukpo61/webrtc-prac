@@ -6,19 +6,19 @@ import { userinfo } from "./socket";
 
 const VoiceChat = () => {
   const [localStream, setLocalStream] = useState(null);
-  const [remoteStreams, setRemoteStreams] = useState([]);
+  const [AllStreams, setAllStreams] = useState([]);
   const [room, setRoom] = useState("my-room");
   const [username, setUsername] = useState("");
-  const [myPeerConnection, setmyPeerConnection] = useState(null);
-  const [RtcPeerConnectionMap, setRtcPeerConnectionMap] = useState(
-    () => new Map()
-  );
+  const [FirstJoin, setFirstJoin] = useState(true);
+  const [RtcPeerConnectionMap, setRtcPeerConnectionMap] = useState(new Map());
 
-  const handleVideoRef = (video) => {
-    if (video) {
-      video.srcObject = localStream;
-    }
-  };
+  // let RtcPeerConnectionMap = new Map();
+
+  // const handleVideoRef = (video) => {
+  //   if (video) {
+  //     video.srcObject = localStream;
+  //   }
+  // };
 
   async function getMedia() {
     try {
@@ -27,48 +27,55 @@ const VoiceChat = () => {
         video: true,
       });
       setLocalStream(myStream);
+
+      handleAddStream(userinfo.id, myStream);
     } catch (e) {
       console.log(e);
     }
   }
 
-  function handleIce(data) {
-    console.log("sent candidate");
-    socket.emit("ice", data.candidate, room);
-  }
+  const handleAddStream = (userid, stream) => {
+    if (stream) {
+      setAllStreams((e) => [...e, { userid, stream }]);
+    }
+  };
 
-  function handleAddStream(data) {
-    setRemoteStreams((e) => [...e, data.stream]);
-  }
-
-  async function initCall() {
-    await getMedia();
-    // 유저의 디바이스를 불러옴.
-    // makeConnection();
-  }
-
-  // handle join room
   const handleJoin = async () => {
-    await initCall();
+    await getMedia();
     socket.emit("join_room", room);
   };
 
-  // handle leave room
   const handleLeave = () => {
-    socket.emit("leave", localStream);
+    setRtcPeerConnectionMap(
+      RtcPeerConnectionMap.forEach((peerconnection, id) => {
+        peerconnection.close();
+        RtcPeerConnectionMap.delete(id);
+      })
+    );
+    localStream.getTracks().forEach((track) => {
+      track.stop();
+    });
+    setAllStreams([]);
+    socket.emit("leave", userinfo.id, room);
   };
 
-  // render remote streams
-  const remoteStreamList = remoteStreams.map((stream, index) => {
+  // 삭제하려면, a, b, c 가 있는 상황에서 c 가 나가면 a와 b 에서 c와의 피어 커낵션을 제거해야하고,
+  // c에서는 리모트 스트림 초기화,
+  // rtcPeerConnectionMap.get(response.id).close();
+  //     rtcPeerConnectionMap.delete(response.id);
+
+  // 소캣에서 또한 나가야 하며, 리모트 스트림을 편집해야 한다. 특정
+
+  const StreamList = AllStreams.map((data) => {
     const remotehandleVideoRef = (video) => {
       if (video) {
-        video.srcObject = stream;
+        video.srcObject = data.stream;
       }
     };
 
     return (
-      <div>
-        {index + 2}
+      <div key={data.userid}>
+        {data.userid}
         <video
           ref={remotehandleVideoRef}
           autoPlay
@@ -81,10 +88,7 @@ const VoiceChat = () => {
     );
   });
 
-  const createRTCPeerConnection = async (otheruserid, peerkind) => {
-    console.log(otheruserid);
-    //a.1-2 b id 받음.
-    //b.1-2 a id 받음.
+  const createRTCPeerConnection = async (otheruserid) => {
     const NewUserPeerConnection = new RTCPeerConnection({
       iceServers: [
         {
@@ -98,92 +102,79 @@ const VoiceChat = () => {
         },
       ],
     });
-    //a.2 b와 연결할 a의 피어커넥션 생성.
-    //b.2 a와 연결할 b의 피어커넥션 생성.
-
-    NewUserPeerConnection.addEventListener("addstream", handleAddStream);
-    NewUserPeerConnection.addEventListener("icecandidate", handleIce);
-    //a.3 애드스트림, 아이스캔디데이트 리스너 추가.
-    //b.3 애드스트림, 아이스캔디데이트 리스너 추가.
 
     localStream
       .getTracks()
       .forEach((track) => NewUserPeerConnection.addTrack(track, localStream));
-    //a.4 a 로컬스트림 트랙 추가.
-    //b.4 b 로컬스트림 트랙 추가.
 
-    if (peerkind === "offer") {
-      const offer = await NewUserPeerConnection.createOffer();
-      //a.5 a 의 오퍼를 생성하고
-      NewUserPeerConnection.setLocalDescription(offer);
-      //a.6 a 로컬피어에 a 로컬 오퍼 추가
-
-      const newMap = new Map(RtcPeerConnectionMap);
-      newMap.set(otheruserid, NewUserPeerConnection);
-      setRtcPeerConnectionMap(newMap);
-
-      //a.7 a의 피어커넥션 맵에 b id인 피어커넥션 추가.
-
-      socket.emit("offer", offer, otheruserid, userinfo.id);
-      //a.8  백앤드로 a offer 와 b id, a id를 보냄.
-      console.log("sent the offer");
-    } else {
-      const answer = await NewUserPeerConnection.createAnswer();
-      //b.5 a 의 오퍼를 생성하고
-      NewUserPeerConnection.setLocalDescription(answer);
-      //b.6 로컬에 자기 로컬 오퍼 추가
-
-      const newMap = new Map(RtcPeerConnectionMap);
-      newMap.set(otheruserid, NewUserPeerConnection);
-      setRtcPeerConnectionMap(newMap);
-
-      //b.7 b의 피어커넥션 맵에 a id인 피어커넥션 추가.
-
-      socket.emit("answer", answer, otheruserid, userinfo.id);
-      //b.8  백앤드로 b answer 와 a id 를 보냄.
-      console.log("sent the answer");
-    }
+    return NewUserPeerConnection;
   };
 
   useEffect(() => {
-    if (RtcPeerConnectionMap.size !== 0) {
-      console.log(RtcPeerConnectionMap);
-      socket.on("offer", async (offer, offeruserid) => {
-        const offeredPeerConnection = RtcPeerConnectionMap.get(offeruserid);
-
-        //a.11 b가 a의 오퍼를 받게 됨
-        offeredPeerConnection.setRemoteDescription(offer);
-        //a.12 b 로컬피어에 a 리모트 오퍼 추가. 둘다 추가됨.
-
-        console.log(`${offeruserid} send offer`);
-      });
-
-      socket.on("answer", (answer, answeruserid) => {
-        const answeredPeerConnection = RtcPeerConnectionMap.get(answeruserid);
-
-        answeredPeerConnection.setRemoteDescription(answer);
-
-        console.log(`${answeruserid} send answer`);
-      });
-    }
-    socket.on("ice", (ice) => {
-      console.log("received candidate");
-      Array.from(RtcPeerConnectionMap.values()).addIceCandidate(ice);
-    });
-  }, [RtcPeerConnectionMap]);
-
-  useEffect(() => {
     if (localStream) {
-      socket.on("welcome", async (welcomeuserid) => {
-        //a.1 a 프런트에 b 의 아이디가 오게됨.
-        await createRTCPeerConnection(welcomeuserid, "offer");
-      });
-      socket.on("getuserids", (nicknames) => {
-        nicknames.map((id) => {
-          createRTCPeerConnection(id, "answer");
-          //b.1 다른사람의 닉네임배열로 (2명이면 a의 id) 피어커넥션 생성함수 실행.
+      if (FirstJoin) {
+        console.log("B socketon");
+        socket.on("welcome", async (answerid) => {
+          const MyPeerConnection = await createRTCPeerConnection();
+
+          MyPeerConnection.onicecandidate = (event) => {
+            socket.emit("ice", event.candidate, userinfo.id);
+          };
+
+          MyPeerConnection.onaddstream = (event) => {
+            handleAddStream(answerid, event.stream);
+          };
+
+          setRtcPeerConnectionMap(
+            RtcPeerConnectionMap.set(answerid, MyPeerConnection)
+          );
+          const offer = await MyPeerConnection.createOffer();
+
+          MyPeerConnection.setLocalDescription(offer);
+
+          socket.emit("offer", offer, userinfo.id, answerid);
         });
-      });
+
+        socket.on("offer", async (offer, offerid, answerid) => {
+          const MyPeerConnection = await createRTCPeerConnection(offerid);
+
+          MyPeerConnection.onicecandidate = (event) => {
+            socket.emit("ice", event.candidate, answerid);
+          };
+          //dㅇㅇd
+          MyPeerConnection.onaddstream = (event) => {
+            handleAddStream(offerid, event.stream);
+          };
+
+          setRtcPeerConnectionMap(
+            RtcPeerConnectionMap.set(offerid, MyPeerConnection)
+          );
+
+          MyPeerConnection.setRemoteDescription(offer);
+
+          const answer = await MyPeerConnection.createAnswer();
+
+          MyPeerConnection.setLocalDescription(answer);
+          console.log("b offer");
+          socket.emit("answer", answer, offerid, answerid);
+        });
+
+        socket.on("answer", (answer, answerid) => {
+          RtcPeerConnectionMap.get(answerid).setRemoteDescription(answer);
+        });
+
+        socket.on("ice", (ice, targetid) => {
+          RtcPeerConnectionMap.get(targetid).addIceCandidate(ice);
+        });
+        socket.on("leave", (targetid) => {
+          RtcPeerConnectionMap.get(targetid).close();
+          RtcPeerConnectionMap.delete(targetid);
+          setAllStreams((e) =>
+            e.filter((stream) => stream.userid !== targetid)
+          );
+        });
+        setFirstJoin(false);
+      }
     }
   }, [localStream]);
 
@@ -204,18 +195,7 @@ const VoiceChat = () => {
         <button onClick={handleJoin}>Join Room</button>
         <button onClick={handleLeave}>Leave Room</button>
       </div>
-      <div>
-        1
-        <video
-          ref={handleVideoRef}
-          autoPlay
-          playsInline
-          width="400"
-          height="400"
-          muted
-        />
-        {remoteStreamList}
-      </div>
+      <div>{StreamList}</div>
     </div>
   );
 };

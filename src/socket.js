@@ -1,7 +1,7 @@
 import { io } from "socket.io-client";
 
 export const userinfo = {
-  id: "1234",
+  id: "user2",
 };
 
 const socket = io("http://localhost:4500");
