@@ -9,9 +9,8 @@ const VoiceChat = () => {
   const [AllStreams, setAllStreams] = useState([]);
   const [room, setRoom] = useState("my-room");
   const [username, setUsername] = useState("");
-  const [FirstJoin, setFirstJoin] = useState(true);
   const [RtcPeerConnectionMap, setRtcPeerConnectionMap] = useState(new Map());
-  const [myDataChannel, setmyDataChannel] = useState(null);
+  const [DataChannelMap, setDataChannelMap] = useState(new Map());
 
   async function getMedia() {
     try {
@@ -26,6 +25,19 @@ const VoiceChat = () => {
     }
   }
 
+  const startSharing = async () => {
+    try {
+      const screenStream = await navigator.mediaDevices.getDisplayMedia({
+        video: true,
+      });
+      setLocalStream(screenStream);
+
+      handleAddStream(userinfo.id, screenStream);
+    } catch (error) {
+      console.error("Error starting screen share", error);
+    }
+  };
+
   const handleAddStream = (userid, stream) => {
     if (stream) {
       setAllStreams((e) => [...e, { userid, stream }]);
@@ -33,6 +45,7 @@ const VoiceChat = () => {
   };
 
   const handleJoin = async () => {
+    // await startSharing();
     await getMedia();
     socket.emit("join_room", room);
   };
@@ -43,7 +56,12 @@ const VoiceChat = () => {
       RtcPeerConnectionMap.forEach((peerconnection, id) => {
         peerconnection.close();
       });
+      RtcPeerConnectionMap.forEach((channel, id) => {
+        channel.close();
+      });
+      localStream.getTracks().forEach((track) => track.stop());
       setRtcPeerConnectionMap(() => new Map());
+      setDataChannelMap(() => new Map());
     }
 
     setAllStreams([]);
@@ -104,13 +122,16 @@ const VoiceChat = () => {
     return NewUserPeerConnection;
   };
 
-  const createData = (MyPeerConnection) => {
-    setmyDataChannel(MyPeerConnection.createDataChannel("chat"));
+  const createData = (MyPeerConnection, answerid) => {
+    const newDataChannel = MyPeerConnection.createDataChannel("chat");
 
-    return MyPeerConnection.createDataChannel("chat");
+    setDataChannelMap((e) => e.set(answerid, newDataChannel));
+
+    return newDataChannel;
   };
-  const createAnswerData = (channel) => {
-    setmyDataChannel(channel);
+
+  const createAnswerData = (channel, offerid) => {
+    setDataChannelMap((e) => e.set(offerid, channel));
 
     return channel;
   };
@@ -126,11 +147,12 @@ const VoiceChat = () => {
       socket.off("answer");
       socket.off("ice");
       socket.off("leave");
-
+      //d
       socket.on("welcome", async (answerid) => {
+        console.log("welcome");
         const MyPeerConnection = await createRTCPeerConnection(answerid);
 
-        const myData = createData(MyPeerConnection);
+        const myData = createData(MyPeerConnection, answerid);
 
         myData.onmessage = (e) => {
           console.log(e.data);
@@ -147,7 +169,7 @@ const VoiceChat = () => {
         const MyPeerConnection = await createRTCPeerConnection(offerid);
 
         MyPeerConnection.ondatachannel = (e) => {
-          const myData = createAnswerData(e.channel);
+          const myData = createAnswerData(e.channel, offerid);
           myData.onmessage = (e) => {
             console.log(e.data);
           };
@@ -178,10 +200,13 @@ const VoiceChat = () => {
           e.delete(targetid);
           return e;
         });
-        console.log(RtcPeerConnectionMap);
+        DataChannelMap.get(targetid).close();
+        setDataChannelMap((e) => {
+          e.delete(targetid);
+          return e;
+        });
         setAllStreams((e) => e.filter((stream) => stream.userid !== targetid));
       });
-      setFirstJoin(false);
     }
 
     return () => {
@@ -191,7 +216,7 @@ const VoiceChat = () => {
       socket.off("ice");
       socket.off("leave");
     };
-  }, [localStream, RtcPeerConnectionMap]);
+  }, [localStream, RtcPeerConnectionMap, DataChannelMap]);
 
   return (
     <div>
@@ -214,7 +239,9 @@ const VoiceChat = () => {
         <button onClick={checkMap}>Map</button>
         <button
           onClick={() => {
-            myDataChannel.send(username);
+            DataChannelMap.forEach((channel, id) => {
+              channel.send(username);
+            });
           }}
         >
           send

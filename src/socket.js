@@ -3,7 +3,7 @@ import { io } from "socket.io-client";
 export const userinfo = {
   id: "user1",
 };
-
+// const socket = io("https://ten-papayas-greet-183-109-20-88.loca.lt/");
 const socket = io("http://localhost:4500");
 
 socket.on("connect", () => {
